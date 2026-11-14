@@ -1,0 +1,79 @@
+name: Android
+
+# Only the phone app. The laptop apps and the shared core have their own jobs in ci.yml, which this fork does
+# not need: what is built here is an APK to install on a phone. Run it from the Actions tab, or push to any
+# branch: the path filter keeps a change outside android/ from starting a build.
+#
+# Every `uses:` is pinned to a commit SHA with its tag in a trailing comment, as in ci.yml.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      # ktlint, Android lint and the unit tests: the same gate ci.yml runs, so a change that would fail there
+      # fails here instead of on the phone.
+      - name: Quality gate
+        run: pwsh scripts/check.ps1 -Ci -Only android
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+      # A debug APK is signed with a keystore the runner invents for that one run, so the next run's build is
+      # a different signer: Android refuses to install it over the last one, and every install would start with
+      # an uninstall. Signing with a key kept in this fork's secrets makes a build replace the one before it.
+      # Without the secrets the APK keeps the runner's throwaway key, so the branch still builds in a fork that
+      # has none.
+      - name: Sign the APK with this fork's key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.EDGEPAD_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.EDGEPAD_KEYSTORE_PASSWORD }}
+        working-directory: android
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          if [ -z "${KEYSTORE_BASE64:-}" ] || [ -z "${KEYSTORE_PASSWORD:-}" ]; then
+            echo "::warning::No signing secrets in this fork, so the APK keeps the runner's throwaway debug key."
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/edgepad-ci.p12"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+          ks_pass=$(printf '%s' "$KEYSTORE_PASSWORD" | tr -d '\r\n')
+          echo "::add-mask::$ks_pass"
+          export KS_PASS="$ks_pass"
+          tools=$(dirname "$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)")
+          # Android 12 reads only the APK Signing Block, which apksigner rewrites whole, but the v1 files the
+          # debug key left in META-INF would travel with the build, so they go. Then align, then sign: signing
+          # seals the archive, and aligning afterwards would break the signature.
+          zip -q -d "$apk" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.DSA' 'META-INF/*.EC' || true
+          "$tools/zipalign" -f -p 4 "$apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$keystore" --ks-type pkcs12 \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS --out "$apk" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" verify --print-certs "$apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: edgepad-android
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
