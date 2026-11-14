@@ -902,9 +902,17 @@ fun AlertDialog.Builder.showOver(owner: View) {
     openOver(owner)
 }
 
-/** As [showOver], for a caller that shapes the dialog's window once it is up. */
-fun AlertDialog.Builder.openOver(owner: View): AlertDialog {
-    val dialog = show()
+/**
+ * As [showOver], for a caller that shapes the dialog's window once it is up: [onShown] runs once the dialog
+ * is showing, which is the moment a dialog that asks for typing can give its field the focus and the phone's
+ * keyboard. Registered before the window appears, so the keyboard comes up with it and not after a tap.
+ */
+fun AlertDialog.Builder.openOver(
+    owner: View,
+    onShown: (AlertDialog) -> Unit = {},
+): AlertDialog {
+    val dialog = create()
+    dialog.setOnShowListener { onShown(dialog) }
     val closer =
         object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) = Unit
@@ -913,6 +921,7 @@ fun AlertDialog.Builder.openOver(owner: View): AlertDialog {
         }
     owner.addOnAttachStateChangeListener(closer)
     dialog.setOnDismissListener { owner.removeOnAttachStateChangeListener(closer) }
+    dialog.show()
     return dialog
 }
 
