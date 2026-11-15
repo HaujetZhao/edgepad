@@ -6,9 +6,10 @@ import me.akshitbansal.edgepad.link.net.Sas
 import me.akshitbansal.edgepad.protocol.ProtocolConstants
 import java.io.IOException
 
-// A first guess, to be tuned from the laptop's "Pointer frames" log line. If pacing does not change the gaps
-// that line shows, the cause is not this phone's queue and the pacing should be removed.
-private const val BLUETOOTH_PACE_MS = 8
+// Test build: no hold at all, so every motion batch goes straight to the socket. The 8 ms pace held a batch before
+// writing, and that measured out at half the pointer rate over Bluetooth: 69/s against 129/s over Wi-Fi. A raw probe
+// showed the link carries about 8,000 five-byte frames per second, so the pace, not the link, was the limit.
+private const val BLUETOOTH_PACE_MS = 0
 
 /**
  * An RFCOMM socket to a bonded laptop. Bluetooth pairing already encrypts the link, so nothing runs in front of
